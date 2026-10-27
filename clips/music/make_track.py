@@ -1,14 +1,19 @@
-"""Original 128 BPM electronic track for the Shorts edit (numpy only)."""
+"""Original high-energy electronic track for the Shorts edit (numpy only).
+
+Usage: make_track.py OUT.wav BPM BARS CUE_BAR,CUE_BAR,...
+Cue bars get a riser before them and a crash on them, so cuts land on hits.
+"""
 import sys
 import wave
 
 import numpy as np
 
 SR = 44100
-BPM = 128
+BPM = float(sys.argv[2])
 BEAT = 60 / BPM
 BAR = BEAT * 4
-BARS = 32
+BARS = int(sys.argv[3])
+CUES = {int(c) for c in sys.argv[4].split(",")}
 N = int(SR * BAR * BARS) + SR
 rng = np.random.default_rng(7)
 
@@ -73,6 +78,21 @@ lead = np.zeros(N)
 fx = np.zeros(N)
 
 K, C, H = kick(), clap(), hat()
+
+
+def open_hat():
+    x = t(0.18)
+    n = np.diff(rng.standard_normal(len(x)), prepend=0)
+    return n * np.exp(-x * 18)
+
+
+def crash():
+    x = t(1.6)
+    n = np.diff(rng.standard_normal(len(x)), prepend=0)
+    return n * np.exp(-x * 2.5)
+
+
+OH, CR = open_hat(), crash()
 stab_cache = {}
 
 for bar in range(BARS):
@@ -80,17 +100,21 @@ for bar in range(BARS):
     chord = PROG[bar % 4]
     root = ROOTS[bar % 4]
     intro = bar < 2
-    breakdown = 16 <= bar < 18
+    pre_cue = (bar + 1) in CUES and bar > 1
     for beat in range(4):
         s = b0 + beat * BEAT
-        if not intro and not breakdown:
+        if not intro:
             add(drums, s, K, 0.9)
             if beat in (1, 3):
                 add(drums, s, C, 0.35)
-        add(drums, s + BEAT / 2, H, 0.25)
+        add(drums, s + BEAT / 2, OH, 0.22)
         if not intro:
-            add(drums, s, H, 0.1)
-        if not intro and not breakdown:
+            for q in (0, 0.25, 0.75):
+                add(drums, s + q * BEAT, H, 0.12)
+        if pre_cue and beat >= 2:
+            for q in (0, 0.25, 0.5, 0.75):  # snare roll into the cut
+                add(drums, s + q * BEAT, C, 0.18 + 0.1 * q)
+        if not intro:
             # offbeat sub bass
             bx = t(BEAT / 2)
             env = np.minimum(1, bx * 200) * np.exp(-bx * 4)
@@ -104,18 +128,21 @@ for bar in range(BARS):
             sig = lowpass(sig, 0.18)
             x = t(dur)
             stab_cache[key] = sig * np.exp(-x * 5)
-        g = 0.12 if (intro or breakdown) else 0.22
+        g = 0.12 if intro else 0.22
         add(chords, b0 + pos * BEAT, stab_cache[key], g)
     # simple lead hook in the second half of each 8-bar phrase
-    if bar % 8 >= 4 and not intro:
-        pattern = [chord[2] + 12, chord[1] + 12, chord[2] + 12, chord[0] + 24]
-        for k, m in enumerate(pattern):
-            dur = BEAT * 0.9
+    if not intro:
+        arp = [chord[0] + 12, chord[1] + 12, chord[2] + 12, chord[1] + 12]
+        for k in range(16):
+            m = arp[k % 4] + (12 if k % 8 >= 6 else 0)
+            dur = BEAT / 4
             x = t(dur)
-            sig = lowpass(saw(note(m), dur, (-0.004, 0.004)), 0.3)
-            add(lead, b0 + k * BEAT, sig * np.exp(-x * 3), 0.1)
+            sig = lowpass(saw(note(m), dur, (-0.004, 0.004)), 0.35)
+            add(lead, b0 + k * BEAT / 4, sig * np.exp(-x * 14), 0.11)
+    if bar in CUES:
+        add(drums, b0, CR, 0.3)
     # noise riser into every 8-bar phrase
-    if bar % 8 == 7 or bar == 1 or bar == 17:
+    if (bar + 1) in CUES:
         x = t(BAR)
         add(fx, b0, rng.standard_normal(len(x)) * (x / BAR) ** 2, 0.12)
 
